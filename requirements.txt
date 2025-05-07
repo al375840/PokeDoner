@@ -1,0 +1,7 @@
+torch
+transformers
+accelerate
+pyboy
+pillow
+sentencepiece
+qwen-vl-utils
