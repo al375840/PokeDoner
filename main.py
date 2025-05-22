@@ -1,4 +1,3 @@
-# main.py
 import time
 import os
 import threading
@@ -7,17 +6,15 @@ import logging
 
 from utils.gemini_agent import GeminiAgent
 from utils.pyboy_capture import (
-    iniciar_emulador, 
-    capturar_pantalla, 
-    mapear_decision_a_pyboy_key, # Importamos la función de mapeo
-    guardar_partida, 
+    init_emulator, 
+    capture_screen, 
+    map_decision_to_pyboy_key, 
+    save_game, 
     DEFAULT_SAVE_STATE_FILENAME
 )
-from utils.memory_buffer import MemoriaContexto
+from utils.memory_buffer import ContextMemory
 
-# --- Configuración de Logging ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-# --- Fin Configuración de Logging ---
 
 ROM_PATH = "game/pokemon_blue.gb" 
 
@@ -25,136 +22,121 @@ SAVES_DIR = "saves"
 if not os.path.exists(SAVES_DIR):
     try:
         os.makedirs(SAVES_DIR)
-        logging.info(f"Directorio de guardado '{SAVES_DIR}' creado.")
+        logging.info(f"Save directory '{SAVES_DIR}' created.")
     except OSError as e:
-        logging.warning(f"ADVERTENCIA: No se pudo crear el directorio '{SAVES_DIR}'. Se usará el directorio actual. Error: {e}")
+        logging.warning(f"WARNING: Could not create directory '{SAVES_DIR}'. Current directory will be used. Error: {e}")
+        SAVE_STATE_FILE_PATH = DEFAULT_SAVE_STATE_FILENAME
+    else:
         SAVE_STATE_FILE_PATH = os.path.join(SAVES_DIR, DEFAULT_SAVE_STATE_FILENAME)
 else:
     SAVE_STATE_FILE_PATH = os.path.join(SAVES_DIR, DEFAULT_SAVE_STATE_FILENAME)
 
-# Intervalo de ticks para que la IA tome una decisión
-INTERVALO_TICKS_DECISION = 300 
-# Intervalo de ticks para guardar la partida periódicamente
-INTERVALO_TICKS_GUARDADO_PERIODICO = 18000
+DECISION_TICKS_INTERVAL = 300 
+PERIODIC_SAVE_TICKS_INTERVAL = 18000
 
 pyboy = None
-agente = None
-memoria = None
+agent = None
+memory = None
 
-decision_actual_global = None
-esperando_respuesta_global = False
-imagen_para_hilo_global = None
-contexto_para_hilo_global = None
+current_decision_global = None
+waiting_for_response_global = False
+image_for_thread_global = None
+context_for_thread_global = None
 
-# --- Variables Globales para Control de Teclas (Simplificadas para pyboy.button(string)) ---
-# No necesitamos rastrear el estado de las teclas aquí, ya que pyboy.button() hace un toque.
-# Si el movimiento no es suficiente, ajustaremos la lógica de pulsación más tarde.
-# --- Fin Variables Globales ---
+def gemini_query_thread():
+    global current_decision_global, waiting_for_response_global, image_for_thread_global, context_for_thread_global, agent
 
-
-def consulta_gemini_thread():
-    global decision_actual_global, esperando_respuesta_global, imagen_para_hilo_global, contexto_para_hilo_global, agente
-
-    if agente is None or imagen_para_hilo_global is None or contexto_para_hilo_global is None:
-        logging.error("[ERROR HILO] Agente o datos de entrada no listos para el hilo.")
-        decision_actual_global = "[ERROR] Datos no listos para IA"
-        esperando_respuesta_global = False
+    if agent is None or image_for_thread_global is None or context_for_thread_global is None:
+        logging.error("Thread ERROR: Agent or input data not ready.")
+        current_decision_global = "ERROR: Data not ready for AI"
+        waiting_for_response_global = False
         return
 
     try:
         start_time = time.time()
-        decision_raw = agente.decidir(imagen_para_hilo_global, contexto_para_hilo_global)
+        raw_decision = agent.decide(image_for_thread_global, context_for_thread_global)
         end_time = time.time()
-        logging.info(f"Gemini respondió en {end_time - start_time:.2f} segundos con: '{decision_raw}'")
-        decision_actual_global = decision_raw
-    except Exception as e_consulta:
-        logging.error(f"[ERROR en Hilo Consulta Gemini] {e_consulta}")
+        logging.info(f"Gemini responded in {end_time - start_time:.2f} seconds with: '{raw_decision}'")
+        current_decision_global = raw_decision
+    except Exception as e_query:
+        logging.error(f"Error in Gemini Query Thread: {e_query}")
         traceback.print_exc()
-        decision_actual_global = "[ERROR] Falla en consulta de agente"
+        current_decision_global = "ERROR: Agent query failed"
     finally:
-        esperando_respuesta_global = False
+        waiting_for_response_global = False
 
 
 def main_loop():
-    global pyboy, agente, memoria
-    global decision_actual_global, esperando_respuesta_global, imagen_para_hilo_global, contexto_para_hilo_global
-    # Ya no necesitamos variables globales de control de teclas complejas aquí
+    global pyboy, agent, memory
+    global current_decision_global, waiting_for_response_global, image_for_thread_global, context_for_thread_global
 
     try:
-        logging.info(f"Intentando iniciar emulador con ROM: '{ROM_PATH}' y archivo de guardado: '{SAVE_STATE_FILE_PATH}'")
-        pyboy = iniciar_emulador(ROM_PATH, save_state_file=SAVE_STATE_FILE_PATH)
-        agente = GeminiAgent()
-        memoria = MemoriaContexto(max_turnos=10)
-        logging.info("--- Componentes inicializados ---")
+        logging.info(f"Attempting to start emulator with ROM: '{ROM_PATH}' and save file: '{SAVE_STATE_FILE_PATH}'")
+        pyboy = init_emulator(ROM_PATH, save_state_file=SAVE_STATE_FILE_PATH)
+        agent = GeminiAgent()
+        memory = ContextMemory(max_turns=10)
+        logging.info("--- Components initialized ---")
     except Exception as e_init:
-        logging.critical(f"FALLO CRÍTICO DURANTE LA INICIALIZACIÓN: {e_init}")
+        logging.critical(f"CRITICAL FAILURE DURING INITIALIZATION: {e_init}")
         traceback.print_exc()
         return 
 
     tick_count = 0
     last_save_tick = 0 
     
-    logging.info("Emulador iniciado. Bucle principal comenzando...")
+    logging.info("Emulator started. Main loop beginning...")
     try:
         while True:
             if not pyboy.tick(): 
-                logging.info("La emulación de PyBoy se ha detenido. Saliendo del bucle.")
+                logging.info("PyBoy emulation has stopped. Exiting loop.")
                 break
             
             tick_count += 1
 
-            # Lógica para solicitar decisión a Gemini
-            # Simplificado: ya no hay lógica de "mantener tecla" aquí
-            if tick_count % INTERVALO_TICKS_DECISION == 0 and not esperando_respuesta_global:
-                imagen_para_hilo_global = capturar_pantalla(pyboy)
-                contexto_para_hilo_global = memoria.obtener()
-                esperando_respuesta_global = True 
-                logging.info(f"Tick {tick_count}: Captura realizada, solicitando decisión a Gemini...")
+            if tick_count % DECISION_TICKS_INTERVAL == 0 and not waiting_for_response_global:
+                image_for_thread_global = capture_screen(pyboy)
+                context_for_thread_global = memory.get_context()
+                waiting_for_response_global = True 
+                logging.info(f"Tick {tick_count}: Screen captured, requesting decision from Gemini...")
                 
-                thread = threading.Thread(target=consulta_gemini_thread, daemon=True)
+                thread = threading.Thread(target=gemini_query_thread, daemon=True)
                 thread.start()
 
-            # Lógica para aplicar la decisión de Gemini
-            if decision_actual_global is not None:
-                logging.info(f"Tick {tick_count}: Procesando decisión '{decision_actual_global}'")
+            if current_decision_global is not None:
+                logging.info(f"Tick {tick_count}: Processing decision '{current_decision_global}'")
                 
-                # Mapear la decisión de texto a la cadena de PyBoy (ej. 'left', 'a')
-                pyboy_key_string = mapear_decision_a_pyboy_key(decision_actual_global) 
+                pyboy_key_string = map_decision_to_pyboy_key(current_decision_global) 
                 
-                # Si se obtuvo una cadena de tecla válida, simular el toque
                 if pyboy_key_string:
-                    logging.info(f"Simulando toque de botón: '{pyboy_key_string}' (para la decisión: '{decision_actual_global}')")
-                    pyboy.button(pyboy_key_string) # <-- Uso directo de pyboy.button(string)
+                    logging.info(f"Simulating button tap: '{pyboy_key_string}' (for decision: '{current_decision_global}')")
+                    pyboy.button(pyboy_key_string)
                 else:
-                    logging.info(f"Decisión '{decision_actual_global}' no mapeada o es 'NONE'. No se simula entrada.")
+                    logging.info(f"Decision '{current_decision_global}' not mapped or is 'NONE'. No input simulated.")
                 
-                memoria.actualizar(f"Tick {tick_count}: Yo (IA) decidí '{decision_actual_global}'")
-                decision_actual_global = None # Limpiar la decisión actual
+                memory.update(f"Tick {tick_count}: I (AI) decided '{current_decision_global}'")
+                current_decision_global = None
 
-            # Guardado periódico
-            if INTERVALO_TICKS_GUARDADO_PERIODICO > 0 and (tick_count - last_save_tick >= INTERVALO_TICKS_GUARDADO_PERIODICO):
-                logging.info(f"Tick {tick_count}: Guardando partida periódicamente...")
-                guardar_partida(pyboy, save_state_file=SAVE_STATE_FILE_PATH)
+            if PERIODIC_SAVE_TICKS_INTERVAL > 0 and (tick_count - last_save_tick >= PERIODIC_SAVE_TICKS_INTERVAL):
+                logging.info(f"Tick {tick_count}: Periodically saving game...")
+                save_game(pyboy, save_state_file=SAVE_STATE_FILE_PATH)
                 last_save_tick = tick_count
             
-            time.sleep(0.005) # Pequeña pausa para evitar usar el 100% de la CPU
+            time.sleep(0.005)
 
     except KeyboardInterrupt:
-        logging.info("\nInterrupción por teclado detectada.")
+        logging.info("\nKeyboard interruption detected.")
     except Exception as e_loop:
-        logging.error(f"\nHa ocurrido un error inesperado en el bucle principal: {e_loop}")
+        logging.error(f"\nAn unexpected error occurred in the main loop: {e_loop}")
         traceback.print_exc()
     finally:
-        # Aquí no necesitamos liberar teclas explícitamente porque pyboy.button() hace un toque.
-        # Si hubiéramos usado button_press/release de forma manual, necesitaríamos liberarlas aquí.
         if pyboy:
-            logging.info("Guardando partida final antes de salir...")
-            guardar_partida(pyboy, save_state_file=SAVE_STATE_FILE_PATH)
-            logging.info("Deteniendo PyBoy...")
+            logging.info("Saving final game state before exiting...")
+            save_game(pyboy, save_state_file=SAVE_STATE_FILE_PATH)
+            logging.info("Stopping PyBoy...")
             pyboy.stop() 
-            logging.info("PyBoy detenido. ¡Adiós!")
+            logging.info("PyBoy stopped. Goodbye!")
         else:
-            logging.info("PyBoy no fue inicializado o ya fue detenido. Saliendo.")
+            logging.info("PyBoy was not initialized or already stopped. Exiting.")
 
 if __name__ == '__main__':
     main_loop()

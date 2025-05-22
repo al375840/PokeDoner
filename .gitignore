@@ -4,6 +4,8 @@ models/
 __pycache__/
 .env
 .DS_Store
+saves/
+logs/
 venv/
 venv_new/
 openrouter_config.py

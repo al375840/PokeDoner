@@ -1,33 +1,32 @@
-# utils/gemini_agent.py
 import google.generativeai as genai
-from openrouter_config import GOOGLE_API_KEY 
-from PIL import Image
 import os
+from PIL import Image
 import io
 
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY") 
+
 genai.configure(api_key=GOOGLE_API_KEY)
-# --- Fin Configuración de la API Key ---
 
 class GeminiAgent:
     def __init__(self, model_name="gemini-1.5-flash-latest"):
         try:
             self.model = genai.GenerativeModel(model_name)
-            print(f"Agente Gemini inicializado con el modelo: {model_name}")
+            print(f"Gemini Agent initialized with model: {model_name}")
         except Exception as e:
-            print(f"Error al inicializar el modelo Gemini ({model_name}): {e}")
-            print("Asegúrate de que tu GOOGLE_API_KEY es válida y tiene permisos para este modelo.")
+            print(f"Error initializing Gemini model ({model_name}): {e}")
+            print("Ensure your GOOGLE_API_KEY is valid and has permissions for this model.")
             raise
 
-    def decidir(self, imagen: Image.Image, contexto: str) -> str:
-        if GOOGLE_API_KEY == "TU_GOOGLE_API_KEY_AQUI":
-            print("[ERROR AGENTE] La API Key de Gemini no está configurada. Saltando decisión.")
-            return "[ERROR] API Key no configurada"
+    def decide(self, image: Image.Image, context: str) -> str:
+        if GOOGLE_API_KEY is None or GOOGLE_API_KEY == "YOUR_GOOGLE_API_KEY_HERE":
+            print("Gemini API Key is not configured. Skipping decision.")
+            return "ERROR: API Key not configured"
 
-        prompt_texto_completo = (
+        full_prompt_text = (
             "You are an expert assistant playing Pokémon Blue. You are observing the game screen. "
             "Based on the current screen image and the recent history of actions, "
             "decide the single best next action to take. "
-            f"Recent history of your actions:\n{contexto}\n\n"
+            f"Recent history of your actions:\n{context}\n\n"
             "Choose ONLY ONE of the following actions. Do not add any other commentary, explanation, or punctuation. "
             "Your entire response should be just one of these exact phrases:\n"
             "- Press A\n"
@@ -52,42 +51,41 @@ class GeminiAgent:
             {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"}
         ]
 
-        contenido_prompt = [imagen, prompt_texto_completo]
-        respuesta_modelo = "[ERROR] Respuesta no inicializada"
+        prompt_content = [image, full_prompt_text]
+        model_response = "ERROR: Response not initialized"
 
         try:
             response = self.model.generate_content(
-                contents=contenido_prompt,
+                contents=prompt_content,
                 generation_config=generation_config,
                 safety_settings=safety_settings,
                 stream=False 
             )
 
             if response.candidates:
-                respuesta_cruda = response.text.strip()
-                acciones_permitidas = [
+                raw_response = response.text.strip()
+                allowed_actions = [
                     "Press A", "Press B", "Move UP", "Move DOWN", 
                     "Move LEFT", "Move RIGHT", "Open MENU", "Select"
                 ]
-                for accion_valida in acciones_permitidas:
-                    if accion_valida.lower() in respuesta_cruda.lower():
-                        respuesta_modelo = accion_valida
+                for valid_action in allowed_actions:
+                    if valid_action.lower() in raw_response.lower():
+                        model_response = valid_action
                         break 
                 else: 
-                    print(f"[ADVERTENCIA AGENTE] Respuesta de Gemini ('{respuesta_cruda}') no contiene una acción esperada. Usando cruda.")
-                    respuesta_modelo = respuesta_cruda 
+                    print(f"AGENT WARNING: Gemini response ('{raw_response}') does not contain an expected action. Using raw response.")
+                    model_response = raw_response 
             else:
-                feedback_razon = "No candidates in response."
+                feedback_reason = "No candidates in response."
                 if response.prompt_feedback:
-                    feedback_razon = f"Prompt feedback: {response.prompt_feedback.block_reason_message or response.prompt_feedback.block_reason}"
-                print(f"[ERROR AGENTE] Respuesta vacía o inválida de Gemini. Razón: {feedback_razon}")
-                respuesta_modelo = f"[ERROR] Gemini: {feedback_razon}"
+                    feedback_reason = f"Prompt feedback: {response.prompt_feedback.block_reason_message or response.prompt_feedback.block_reason}"
+                print(f"AGENT ERROR: Empty or invalid response from Gemini. Reason: {feedback_reason}")
+                model_response = f"ERROR: Gemini: {feedback_reason}"
 
         except Exception as e:
-            print(f"[ERROR AGENTE] Fallo al contactar o procesar respuesta de Gemini API: {e}")
-            # Intentar obtener más información si es un error de la API de Google
-            if hasattr(e, 'message'): # Errores de google.api_core.exceptions
-                 print(f"[ERROR AGENTE DETALLE] {e.message}")
-            respuesta_modelo = "[ERROR] Falla en solicitud a Gemini API"
+            print(f"AGENT ERROR: Failed to contact or process Gemini API response: {e}")
+            if hasattr(e, 'message'): 
+                 print(f"AGENT ERROR DETAILS: {e.message}")
+            model_response = "ERROR: Gemini API request failed"
 
-        return respuesta_modelo
+        return model_response

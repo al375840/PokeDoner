@@ -1,12 +1,12 @@
-class MemoriaContexto:
-    def __init__(self, max_turnos=5):
-        self.turnos = []
-        self.max_turnos = max_turnos
+class ContextMemory:
+    def __init__(self, max_turns=5):
+        self.turns = []
+        self.max_turns = max_turns
 
-    def actualizar(self, entrada: str):
-        self.turnos.append(entrada)
-        if len(self.turnos) > self.max_turnos:
-            self.turnos.pop(0)
+    def update(self, entry: str):
+        self.turns.append(entry)
+        if len(self.turns) > self.max_turns:
+            self.turns.pop(0)
 
-    def obtener(self):
-        return "\n".join(self.turnos)
+    def get_context(self):
+        return "\n".join(self.turns)
