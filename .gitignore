@@ -5,4 +5,5 @@ __pycache__/
 .env
 .DS_Store
 venv/
+venv_new/
 openrouter_config.py

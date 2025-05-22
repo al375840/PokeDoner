@@ -5,3 +5,4 @@ pyboy
 pillow
 sentencepiece
 qwen-vl-utils
+google-generativeai
