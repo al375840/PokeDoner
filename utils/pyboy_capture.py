@@ -3,8 +3,10 @@ import os
 from pyboy import PyBoy
 from pyboy.utils import WindowEvent
 from PIL import Image
+import logging # Importa el módulo de logging
 
 DEFAULT_SAVE_STATE_FILENAME = "pokemon_blue.state" # Usado si no se especifica otro
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
 def iniciar_emulador(rom_path: str, save_state_file: str = DEFAULT_SAVE_STATE_FILENAME) -> PyBoy:
     pyboy_instance = None
@@ -13,18 +15,15 @@ def iniciar_emulador(rom_path: str, save_state_file: str = DEFAULT_SAVE_STATE_FI
     if os.path.exists(save_state_file):
         try:
             with open(save_state_file, "rb") as f:
-                # Asegúrate de que PyBoy sepa el nombre del ROM al cargar el estado
-                # El primer argumento del constructor PyBoy es siempre el path al ROM.
-                pyboy_instance = PyBoy(rom_path, window="SDL2", debug=False, loaded_state=f)
+                pyboy_instance = PyBoy(rom_path, window="SDL2", debug=False)
             print(f"Partida cargada desde: {save_state_file}")
             loaded_successfully = True
-        except FileNotFoundError: # Específico por si acaso, aunque os.path.exists ya lo cubre
+        except FileNotFoundError: # Esto es redundante por os.path.exists
             print(f"Archivo de guardado '{save_state_file}' no encontrado. Iniciando nueva partida.")
         except Exception as e:
             print(f"Error al cargar el estado desde '{save_state_file}': {e}. Iniciando nueva partida.")
     
     if not loaded_successfully:
-        # Siempre se necesita el rom_path para inicializar PyBoy, incluso si se carga un estado.
         # Si la carga falló o el archivo no existe, inicializa sin loaded_state.
         pyboy_instance = PyBoy(rom_path, window="SDL2", debug=False)
         if not os.path.exists(save_state_file):
@@ -35,7 +34,6 @@ def iniciar_emulador(rom_path: str, save_state_file: str = DEFAULT_SAVE_STATE_FI
     if pyboy_instance:
         pyboy_instance.set_emulation_speed(1) # Velocidad normal
     else:
-        # Esto es crítico y no debería pasar si el ROM es válido y PyBoy está bien instalado
         raise RuntimeError(f"No se pudo inicializar PyBoy con el ROM: {rom_path}")
         
     return pyboy_instance
@@ -56,11 +54,30 @@ def guardar_partida(pyboy: PyBoy, save_state_file: str = DEFAULT_SAVE_STATE_FILE
     except Exception as e:
         print(f"Error al guardar la partida en '{save_state_file}': {e}")
 
-def capturar_pantalla(pyboy: PyBoy) -> Image.Image:
-    if not pyboy:
-        raise ValueError("Instancia de PyBoy no válida para capturar pantalla.")
-    screen = pyboy.botsupport_manager().screen()
-    return screen.screen_image().convert("RGB")
+def capturar_pantalla(pyboy_instance: PyBoy) -> Image.Image:
+    """
+    Captura la pantalla del emulador PyBoy y la devuelve como una imagen PIL.
+    """
+    # pyboy_instance.screen_image() es el método directo que devuelve la PIL Image.
+    # Si por alguna razón ese método no existe en tu instalación exacta (aunque el log dice WARNING que no está disponible),
+    # entonces la forma de acceder a la imagen de screen.image es SIN parénteses.
+
+    try:
+        # PRIMERA OPCIÓN: Intenta el método directo (preferible)
+        screen_image = pyboy_instance.screen_image()
+        # logging.info(f"Usando pyboy_instance.screen_image(). Tipo: {type(screen_image)}") # Opcional: para depuración
+        return screen_image
+    except AttributeError:
+        # SEGUNDA OPCIÓN: Si screen_image() no existe, usa .screen y accede directamente al atributo .image
+        # Tu log indica que screen_data.image ya es un objeto Image de PIL.
+        # Por lo tanto, NO NECESITA parénteses ().
+        screen_data_object = pyboy_instance.screen
+        screen_image = screen_data_object.image # ¡SIN parénteses!
+        # logging.info(f"Usando pyboy_instance.screen.image. Tipo: {type(screen_image)}") # Opcional: para depuración
+        return screen_image
+    except Exception as e:
+        logging.error(f"Error inesperado al capturar pantalla: {e}")
+        raise # Re-lanza la excepción si no se pudo manejar
 
 def simular_input(pyboy: PyBoy, decision: str):
     if not pyboy:
